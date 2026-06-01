@@ -4,7 +4,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
-#include <unistd.h>
 
 enum {
   SIZE = 8,
@@ -37,7 +36,6 @@ typedef struct {
   float mw2[H2 * H1], vw2[H2 * H1], mb2[H2], vb2[H2];
   float mwp[ACTIONS * H2], vwp[ACTIONS * H2], mbp[ACTIONS], vbp[ACTIONS];
   float mwv[H2], vwv[H2], mbv, vbv;
-  int adam_t;
   float b1pow, b2pow;
 } Model;
 
@@ -164,8 +162,7 @@ static int collides(Env *e, int x, int y, int grow) {
   return grow || x != e->xs[tail] || y != e->ys[tail];
 }
 
-static float env_step(Env *e, int action, int *done) {
-  *done = 0;
+static float env_step(Env *e, int action) {
   int nd = next_dir(e->dir, action), dx, dy;
   delta(nd, &dx, &dy);
   int nx = e->xs[0] + dx, ny = e->ys[0] + dy;
@@ -173,7 +170,6 @@ static float env_step(Env *e, int action, int *done) {
   e->steps++;
   if (collides(e, nx, ny, grow)) {
     e->alive = 0;
-    *done = 1;
     return -1.0f;
   }
 
@@ -331,8 +327,8 @@ static Rollout collect(Model *m, Env *envs, int env_count, int steps) {
       r.values[k] = forward(m, obs, &w);
       float lp;
       int a = sample_action(&envs[e].rng, w.logits, &lp);
-      int done;
-      float rew = env_step(&envs[e], a, &done);
+      float rew = env_step(&envs[e], a);
+      int done = !envs[e].alive;
       int idle = envs[e].since_food >= idle_limit(&envs[e]);
       r.actions[k] = (unsigned char)a;
       r.old_logp[k] = lp;
@@ -483,7 +479,6 @@ static void update(Model *m, Rollout *r, Rng *rng) {
         }
       }
 
-      m->adam_t++;
       m->b1pow *= 0.9f;
       m->b2pow *= 0.999f;
       float step = lr * sqrtf(1.0f - m->b2pow) / (1.0f - m->b1pow);
@@ -519,8 +514,7 @@ static void eval_model(Model *m, int episodes, Eval *ev) {
   for (int i = 0; i < episodes; i++) {
     Env e = env_create(50000 + i);
     while (e.alive && e.since_food < idle_limit(&e)) {
-      int done;
-      (void)env_step(&e, greedy(m, &e), &done);
+      (void)env_step(&e, greedy(m, &e));
     }
     int visits = pop64(e.visited);
     ev->mean_score += (float)e.score;
@@ -561,9 +555,8 @@ static double now_sec(void) {
 }
 
 static void show(Model *m, Env *watch, int iter, double elapsed, double samples, int envs, Eval *ev) {
-  int done = 0;
   if (!watch->alive || watch->since_food >= idle_limit(watch)) env_reset(watch);
-  (void)env_step(watch, greedy(m, watch), &done);
+  (void)env_step(watch, greedy(m, watch));
   char board[(SIZE + 1) * SIZE + 1];
   render_env(watch, board, sizeof board);
   printf("\033[2J\033[Hsnake ppo c 8x8 | iter %d | %.1fs | envs %d | %.0f sample/s\n", iter, elapsed, envs,
@@ -573,7 +566,6 @@ static void show(Model *m, Env *watch, int iter, double elapsed, double samples,
          100.0f * ev->mean_visit_cov, 100.0f * ev->p30_visit, ev->mean_steps);
   printf("%s", board);
   fflush(stdout);
-  (void)done;
 }
 
 static void train(double seconds, int env_count, int viz) {
