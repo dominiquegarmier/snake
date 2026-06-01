@@ -178,7 +178,6 @@ static float env_step(Env *e, int action, int *done) {
   }
 
   int nc = cell(nx, ny);
-  int fresh = ((e->visited >> nc) & 1ULL) == 0;
   e->dir = nd;
   if (grow) {
     e->len++;
@@ -202,7 +201,7 @@ static float env_step(Env *e, int action, int *done) {
     return 2.0f + 0.03f * (float)e->len;
   }
   e->since_food++;
-  return -0.004f + (fresh ? 0.002f : 0.0f);
+  return -0.004f;
 }
 
 static float init_weight(Rng *r, int fan_in) {
@@ -592,7 +591,7 @@ static void train(double seconds, int env_count, int viz) {
 
   double t0 = now_sec(), next_viz = 0.0, next_eval = 0.0, samples = 0.0;
   int iter = 0;
-  while (now_sec() - t0 < seconds) {
+  while (seconds <= 0.0 || now_sec() - t0 < seconds) {
     Rollout r = collect(m, envs, env_count, ROLLOUT_STEPS);
     advantages(&r);
     update(m, &r, &rng);
@@ -606,7 +605,7 @@ static void train(double seconds, int env_count, int viz) {
     }
     if (viz && elapsed >= next_viz) {
       show(m, &watch, iter, elapsed, samples, env_count, &ev);
-      next_viz = elapsed + 0.10;
+      next_viz = elapsed + 0.033;
     } else if (!viz) {
       printf("\riter=%d %.1fs %.0f sample/s len_cov=%.1f%% visit_cov=%.1f%%", iter, elapsed, samples / elapsed,
              100.0f * ev.mean_len_cov, 100.0f * ev.mean_visit_cov);
@@ -624,13 +623,13 @@ static void train(double seconds, int env_count, int viz) {
 
 int main(int argc, char **argv) {
   if (argc >= 2 && strcmp(argv[1], "train") == 0) {
-    train(argc >= 3 ? atof(argv[2]) : 120.0, argc >= 4 ? atoi(argv[3]) : 256, 1);
+    train(argc >= 3 ? atof(argv[2]) : 0.0, argc >= 4 ? atoi(argv[3]) : 256, 1);
     return 0;
   }
   if (argc >= 2 && strcmp(argv[1], "bench") == 0) {
     train(argc >= 3 ? atof(argv[2]) : 30.0, argc >= 4 ? atoi(argv[3]) : 256, 0);
     return 0;
   }
-  fprintf(stderr, "usage: %s {train [seconds envs]|bench [seconds envs]}\n", argv[0]);
+  fprintf(stderr, "usage: %s {train [seconds envs]|bench [seconds envs]} (train seconds <= 0 means forever)\n", argv[0]);
   return 2;
 }

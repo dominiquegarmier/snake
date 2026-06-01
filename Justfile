@@ -4,7 +4,7 @@ default:
 build:
     cc -O3 -ffast-math -march=native -flto -Wall -Wextra -o snake snake.c
 
-train seconds="120" envs="256":
+train seconds="0" envs="256":
     cc -O3 -ffast-math -march=native -flto -Wall -Wextra -o snake snake.c
     ./snake train {{seconds}} {{envs}}
 
