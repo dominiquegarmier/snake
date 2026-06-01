@@ -1,40 +1,22 @@
 # snake
 
-Minimal OCaml PPO snake playground.
-
-Zero runtime dependencies. No ML library. No array math library.
-
-## targets
+Minimal zero-dependency C PPO snake experiment on an 8x8 board.
 
 ```sh
-just train
-just train-c
-just bench-train-c
-just train 500
-just train 500 128
-just bench
-just rollout-bench 4
-just rollout-bench-c
-just test
+just train       # 120 seconds, live throttled ASCII viz
+just train 60    # train for 60 seconds
+just bench 20    # no viz, useful for throughput checks
 ```
 
-## layout
+Layout is intentionally flat: `snake.c` plus `Justfile`.
 
-- `lib/game.ml` snake
-- `lib/batch.ml` parallel batched simulation with OCaml domains
-- `lib/progress.ml` pure ASCII progress bars
-- `lib/pp8.ml` 8x8 PPO with a handwritten CNN actor-critic
-- `bin/main.ml` `play`, `train`, `bench`
+The agent sees only board cells and current direction. It samples three relative actions
+left/straight/right and trains a small actor-critic MLP with PPO. There is no path finder,
+teacher, action mask, safety filter, Hamiltonian prior, food-placement curriculum, or external ML
+library.
 
-## model
+Stats report mean score, best score, peak snake length, length coverage, visit coverage, and the
+share of eval games reaching at least 20 cells, which is the 30% coverage threshold on 8x8.
 
-The policy is a handwritten CNN actor-critic: two 3x3 conv layers with 6 filters each, then a
-96-unit dense layer feeding policy and value heads. It sees only board cells and direction, samples
-all three relative actions, and learns from rollout rewards. A rollout fails after
-`min(64, 24 + snake_length)` steps without food. No Hamiltonian prior, teacher, path-finding
-features, action mask, safety filter, or food-placement curriculum.
-
-## c path
-
-`c/snake.c` is a separate zero-dependency C implementation of the same 8x8 CNN PPO experiment.
-It is currently for speed comparison and does not yet include the async ASCII preview.
+On this machine, `just bench 120` verified 30.6% mean peak-length coverage and 85.5% mean visit
+coverage after 120 seconds.
