@@ -1,9 +1,11 @@
 #include <math.h>
 #include <stdint.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <unistd.h>
 
 enum {
   SIZE = 8,
@@ -21,6 +23,7 @@ enum {
 };
 
 static const double VIZ_DT = 0.016;
+static volatile sig_atomic_t stop = 0;
 
 typedef struct { uint64_t s; } Rng;
 
@@ -539,15 +542,29 @@ static void eval_model(Model *m, int episodes, Eval *ev) {
   ev->mean_steps *= inv;
 }
 
-static void render_env(Env *e, char *buf, size_t n) {
-  size_t pos = 0;
-  for (int y = 0; y < SIZE && pos + SIZE + 1 < n; y++) {
-    for (int x = 0; x < SIZE; x++) buf[pos++] = '.';
-    buf[pos++] = '\n';
+static void on_sigint(int sig) {
+  (void)sig;
+  stop = 1;
+}
+
+static void ui_restore(void) {
+  printf("\033[?25h\033[0m\n");
+  fflush(stdout);
+}
+
+static void ui_start(void) {
+  signal(SIGINT, on_sigint);
+  atexit(ui_restore);
+  printf("\033[?25l");
+}
+
+static char env_at(Env *e, int x, int y) {
+  int c = cell(x, y);
+  if (e->food == c) return '*';
+  for (int i = 0; i < e->len; i++) {
+    if (e->xs[i] == x && e->ys[i] == y) return i == 0 ? '#' : 'o';
   }
-  if (e->food >= 0) buf[e->food / SIZE * (SIZE + 1) + e->food % SIZE] = '*';
-  for (int i = e->len - 1; i >= 0; i--) buf[e->ys[i] * (SIZE + 1) + e->xs[i]] = i == 0 ? '#' : 'o';
-  buf[pos] = 0;
+  return '.';
 }
 
 static double now_sec(void) {
@@ -563,21 +580,28 @@ static void sleep_sec(double seconds) {
   nanosleep(&ts, NULL);
 }
 
-static void show(Model *m, Env *watch, int iter, double elapsed, double samples, int envs, Eval *ev) {
+static void show(Model *m, Env *watch, int iter, double elapsed, double samples, int envs, Eval *ev, const char *mode) {
   if (!watch->alive || watch->since_food >= idle_limit(watch)) env_reset(watch);
   (void)env_step(watch, greedy(m, watch));
-  char board[(SIZE + 1) * SIZE + 1];
-  render_env(watch, board, sizeof board);
-  printf("\033[2J\033[Hsnake ppo c 8x8 | iter %d | %.1fs | envs %d | %.0f sample/s\n", iter, elapsed, envs,
+  printf("\033[2J\033[Hsnake ppo c 8x8  [%s]   Ctrl+C quit\n", mode);
+  printf("iter %-6d time %6.1fs   envs %-4d   %8.0f sample/s\n", iter, elapsed, envs,
          samples / (elapsed > 0.001 ? elapsed : 0.001));
-  printf("score %.2f best %d | len %.1f/64 %.1f%% p30 %.0f%% | visit %.1f%% p30 %.0f%% | steps %.0f\n\n",
-         ev->mean_score, ev->best_score, ev->mean_peak_len, 100.0f * ev->mean_len_cov, 100.0f * ev->p30_len,
-         100.0f * ev->mean_visit_cov, 100.0f * ev->p30_visit, ev->mean_steps);
-  printf("%s", board);
+  printf("score %5.2f   best %-2d   len %4.1f/64 %5.1f%%   p30 %3.0f%%\n",
+         ev->mean_score, ev->best_score, ev->mean_peak_len, 100.0f * ev->mean_len_cov, 100.0f * ev->p30_len);
+  printf("visit %5.1f%%   p30 %3.0f%%   steps %.0f\n\n", 100.0f * ev->mean_visit_cov, 100.0f * ev->p30_visit,
+         ev->mean_steps);
+  printf("+--------+\n");
+  for (int y = 0; y < SIZE; y++) {
+    putchar('|');
+    for (int x = 0; x < SIZE; x++) putchar(env_at(watch, x, y));
+    printf("|\n");
+  }
+  printf("+--------+\n\n# head  o body  * food");
   fflush(stdout);
 }
 
 static void train(double seconds, int env_count, int viz) {
+  if (viz) ui_start();
   Model *m = model_create(8);
   Env *envs = calloc((size_t)env_count, sizeof(Env));
   if (!envs) {
@@ -592,7 +616,7 @@ static void train(double seconds, int env_count, int viz) {
 
   double t0 = now_sec(), next_viz = 0.0, next_eval = 0.0, samples = 0.0;
   int iter = 0;
-  while (seconds <= 0.0 || now_sec() - t0 < seconds) {
+  while (!stop && (seconds <= 0.0 || now_sec() - t0 < seconds)) {
     Rollout r = collect(m, envs, env_count, ROLLOUT_STEPS);
     advantages(&r);
     update(m, &r, &rng);
@@ -605,7 +629,7 @@ static void train(double seconds, int env_count, int viz) {
       next_eval = elapsed + 2.0;
     }
     if (viz && elapsed >= next_viz) {
-      show(m, &watch, iter, elapsed, samples, env_count, &ev);
+      show(m, &watch, iter, elapsed, samples, env_count, &ev, "TRAIN");
       next_viz = elapsed + VIZ_DT;
     } else if (!viz) {
       printf("\riter=%d %.1fs %.0f sample/s len_cov=%.1f%% visit_cov=%.1f%%", iter, elapsed, samples / elapsed,
@@ -618,12 +642,13 @@ static void train(double seconds, int env_count, int viz) {
          now_sec() - t0, iter, samples, samples / (now_sec() - t0), ev.mean_score, ev.best_score, ev.mean_peak_len,
          ev.best_len, 100.0f * ev.mean_len_cov, 100.0f * ev.p30_len, 100.0f * ev.mean_visit_cov,
          100.0f * ev.p30_visit, ev.mean_steps);
-  if (viz && seconds > 0.0) {
+  if (viz && seconds > 0.0 && !stop) {
     for (;;) {
       double frame = now_sec();
-      show(m, &watch, iter, seconds, samples, env_count, &ev);
+      show(m, &watch, iter, seconds, samples, env_count, &ev, "PREVIEW");
       double left = VIZ_DT - (now_sec() - frame);
       if (left > 0.0) sleep_sec(left);
+      if (stop) break;
     }
   }
   free(envs);
