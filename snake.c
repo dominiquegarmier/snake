@@ -606,7 +606,7 @@ static void train(double seconds, int env_count, int viz) {
     }
     if (viz && elapsed >= next_viz) {
       show(m, &watch, iter, elapsed, samples, env_count, &ev);
-      next_viz = elapsed + 0.25;
+      next_viz = elapsed + 0.10;
     } else if (!viz) {
       printf("\riter=%d %.1fs %.0f sample/s len_cov=%.1f%% visit_cov=%.1f%%", iter, elapsed, samples / elapsed,
              100.0f * ev.mean_len_cov, 100.0f * ev.mean_visit_cov);
