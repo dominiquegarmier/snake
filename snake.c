@@ -20,6 +20,8 @@ enum {
   BATCH = 1024
 };
 
+static const double VIZ_DT = 0.016;
+
 typedef struct { uint64_t s; } Rng;
 
 typedef struct {
@@ -554,6 +556,13 @@ static double now_sec(void) {
   return (double)ts.tv_sec + (double)ts.tv_nsec * 1e-9;
 }
 
+static void sleep_sec(double seconds) {
+  struct timespec ts;
+  ts.tv_sec = (time_t)seconds;
+  ts.tv_nsec = (long)((seconds - (double)ts.tv_sec) * 1000000000.0);
+  nanosleep(&ts, NULL);
+}
+
 static void show(Model *m, Env *watch, int iter, double elapsed, double samples, int envs, Eval *ev) {
   if (!watch->alive || watch->since_food >= idle_limit(watch)) env_reset(watch);
   (void)env_step(watch, greedy(m, watch));
@@ -597,7 +606,7 @@ static void train(double seconds, int env_count, int viz) {
     }
     if (viz && elapsed >= next_viz) {
       show(m, &watch, iter, elapsed, samples, env_count, &ev);
-      next_viz = elapsed + 0.016;
+      next_viz = elapsed + VIZ_DT;
     } else if (!viz) {
       printf("\riter=%d %.1fs %.0f sample/s len_cov=%.1f%% visit_cov=%.1f%%", iter, elapsed, samples / elapsed,
              100.0f * ev.mean_len_cov, 100.0f * ev.mean_visit_cov);
@@ -609,6 +618,14 @@ static void train(double seconds, int env_count, int viz) {
          now_sec() - t0, iter, samples, samples / (now_sec() - t0), ev.mean_score, ev.best_score, ev.mean_peak_len,
          ev.best_len, 100.0f * ev.mean_len_cov, 100.0f * ev.p30_len, 100.0f * ev.mean_visit_cov,
          100.0f * ev.p30_visit, ev.mean_steps);
+  if (viz && seconds > 0.0) {
+    for (;;) {
+      double frame = now_sec();
+      show(m, &watch, iter, seconds, samples, env_count, &ev);
+      double left = VIZ_DT - (now_sec() - frame);
+      if (left > 0.0) sleep_sec(left);
+    }
+  }
   free(envs);
   free(m);
 }
